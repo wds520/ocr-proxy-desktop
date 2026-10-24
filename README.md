@@ -53,6 +53,8 @@ Codex 的连接地址按 provider 配置，因此启用后此 provider 的所有
 
 构建环境：Python 3.13 x64；依赖版本见 `requirements-runtime.txt` 和 `requirements-build.txt`。将依赖装入开发虚拟环境后运行 `build.ps1 -Python <python.exe>`。本次构建把额外桌面打包依赖放在项目 `vendor/`，未安装为系统桌面应用。
 
+也可以由 GitHub Actions 自动打包：推送 `v*` 形式的 Git tag 后，`.github/workflows/windows-release.yml` 会生成 Windows x64 便携版 ZIP、SHA256 校验文件，并自动创建 GitHub Release。手动执行该 workflow 时，只会产出构建产物，不会发布 Release。
+
 可使用 EXE 内置的隔离自检：
 
 ```powershell
