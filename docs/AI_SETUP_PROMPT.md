@@ -1,6 +1,6 @@
 # 用 AI 在 Windows 上跑通 OCR 代理
 
-把下面这段话完整发给任意可执行命令的 AI 编程助手（Codex、Cursor、Cline、Windsurf 等），并把 `<仓库地址>` 替换成实际 GitHub 地址。
+把下面这段话完整发给任意可执行命令的 AI 编程助手（Codex、Cursor、Cline、Windsurf 等）。
 
 ```text
 请帮我在这台 Windows 电脑上跑通本仓库的 OCR 代理，让支持 OpenAI-compatible API 的 agent 可以把图片先 OCR 成文字再交给 GLM-5.3。
@@ -12,7 +12,7 @@
 4. 请只做本仓库范围内的安装、配置和验证，不要修改无关系统设置。
 
 请按以下顺序执行：
-1. 克隆仓库：<仓库地址>
+1. 克隆仓库：https://github.com/wds520/ocr-proxy-desktop
 2. 进入仓库目录。
 3. 用 Python 3.11+ 创建虚拟环境，并安装 requirements-runtime.txt。
 4. 启动 `python src/app.py`。
