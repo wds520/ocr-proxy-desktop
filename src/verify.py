@@ -15,8 +15,8 @@ from pathlib import Path
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 
-from core import Settings, Store, Routing, VERSION, atomic_write, read_provider, replace_base
-from engine import OCR, ProxyServer, model_matches
+from core import Settings, Store, VERSION
+from engine import OCR, ProxyServer, model_matches, upstream_url
 
 
 def verify_bundle(output: Path) -> int:
@@ -79,73 +79,41 @@ def verify_bundle(output: Path) -> int:
 
     with tempfile.TemporaryDirectory(prefix="ocr-proxy-check-") as temp:
         root = Path(temp)
-        config = root / "config.toml"
-        original_text = 'model_provider = "cpa-gui"\r\n# keep me\r\n[model_providers.cpa-gui]\r\nbase_url = \'http://127.0.0.1:8317/v1\' # keep comment\r\nenv_key = "TEST_ONLY"\r\n[model_providers.other]\r\nbase_url = "https://example.invalid/v1"\r\n'
-        atomic_write(config, original_text)
         store = Store(root / "data")
-        settings = Settings(codex_config=str(config))
-        routing = Routing(store)
 
-        def routing_cycle():
-            routing.enable(settings)
-            text, base = read_provider(config, "cpa-gui")
-            require(base == settings.proxy_base and "# keep comment\r\n" in text)
-            require(read_provider(config, "other")[1] == "https://example.invalid/v1")
-            require("TEST_ONLY" not in store.journal_path.read_text())
-            routing.enable(settings)
-            require(store.journal()["original"] == settings.direct_base)
-            routing.restore(settings)
-            require(read_provider(config, "cpa-gui")[1] == settings.direct_base)
-            require(not store.journal_path.exists())
-        check("Codex switch, repeated enable, scoped edit, CRLF, restore", routing_cycle)
+        def defaults_test():
+            defaults = Settings()
+            require(defaults.upstream == "https://gateway.onewo.com/v1")
+            require(defaults.listen_port == 8318)
+            defaults.validate()
+        check("Default upstream and settings", defaults_test)
 
-        def recovery():
-            routing.enable(settings)
-            new_routing = Routing(Store(root / "data"))
-            new_routing.restore(settings)
-            require(read_provider(config, "cpa-gui")[1] == settings.direct_base)
-        check("Recovery after interrupted desktop session", recovery)
-
-        def external_edit():
-            routing.enable(settings)
-            text, current = read_provider(config, settings.provider)
-            external = "http://127.0.0.1:9999/v1"
-            atomic_write(config, replace_base(text, settings.provider, current, external))
-            try:
-                routing.restore(settings)
-            except ValueError:
-                require(read_provider(config, settings.provider)[1] == external)
-            else:
-                raise AssertionError()
-            store.journal_path.unlink()
-            atomic_write(config, original_text)
-        check("Preserve external provider changes", external_edit)
-
-        def legacy_restore():
-            text, current = read_provider(config, settings.provider)
-            atomic_write(config, replace_base(text, settings.provider, current, settings.proxy_base))
-            routing.enable(settings)
-            routing.restore(settings)
-            require(read_provider(config, settings.provider)[1] == settings.direct_base)
-        check("Restore original WorkBuddy 8318 routing", legacy_restore)
+        def upstream_url_test():
+            require(upstream_url("https://gateway.onewo.com/v1", "/v1/models") == "https://gateway.onewo.com/v1/models")
+            require(upstream_url("https://gateway.onewo.com/v1", "models") == "https://gateway.onewo.com/v1/models")
+            require(upstream_url("http://127.0.0.1:8317", "/v1/responses") == "http://127.0.0.1:8317/v1/responses")
+            require(upstream_url("http://127.0.0.1:8317", "responses") == "http://127.0.0.1:8317/responses")
+        check("Upstream URL joins preserve /v1 exactly once", upstream_url_test)
 
         def pattern_test():
             require(model_matches("GC-glm-5.3", ["gc-*"]))
             require(model_matches("glm-5", ["glm-?"]))
-            require(not model_matches("vision-model", settings.models))
+            require(not model_matches("vision-model", ["gc-*", "glm-*", "deepseek-*"]))
         check("Model wildcard rules and case handling", pattern_test)
 
         def settings_test():
+            settings = Settings(upstream="https://gateway.onewo.com/v1")
             store.save(settings)
             require(store.load() == settings)
             for invalid in (Settings(upstream="http://user:pass@localhost:8317"),
-                            Settings(upstream="http://127.0.0.1:8318"), Settings(upstream="http://127.0.0.1:8317/v1")):
+                            Settings(upstream="http://127.0.0.1:8318"),
+                            Settings(upstream="http://127.0.0.1:8318/v1")):
                 try:
                     invalid.validate()
                 except ValueError:
                     continue
                 raise AssertionError()
-        check("Portable settings and loop/credential validation", settings_test)
+        check("Portable settings round-trip and loop/credential validation", settings_test)
 
         ocr = OCR()
         check("Bundled ONNX models recognize actual image text", lambda: require("123456" in ocr.selftest()))
@@ -161,7 +129,7 @@ def verify_bundle(output: Path) -> int:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
-        settings = Settings(upstream=f"http://127.0.0.1:{upstream.server_port}", listen_port=port, codex_config=str(config))
+        settings = Settings(upstream=f"http://127.0.0.1:{upstream.server_port}/v1", listen_port=port)
         server = ProxyServer(settings, ocr)
         try:
             server.start()
@@ -242,7 +210,7 @@ def verify_bundle(output: Path) -> int:
         check("Graceful server shutdown", lambda: require(not server.running))
 
     report = {"version": VERSION, "passed": all(r["passed"] for r in records), "checks": records,
-              "scope": "Isolated files, generated OCR image and mock upstream; no real Codex config or paid API modified/called."}
+              "scope": "Isolated files, generated OCR image and mock upstream; no real agent config or paid API modified/called."}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0 if report["passed"] else 1

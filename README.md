@@ -1,65 +1,64 @@
 # OCR 代理助手 · Windows 绿色便携版
 
-如果你要把这套流程交给其他同事或让 AI 帮忙配置，请直接使用 `docs/AI_SETUP_PROMPT.md` 中的提示词。
+如要把整套流程交给其他人或让 AI 帮忙配置，请直接使用 `docs/AI_SETUP_PROMPT.md` 中的提示词。
 
 解压整个压缩包，双击 `OCRProxyDesktop.exe`。无需安装 Python、Node.js 或下载 OCR 模型，无需管理员权限，不写注册表，不添加开机启动。适用 Windows 10/11 x64。程序未做商业代码签名；公司若禁止运行未签名程序，仍须按公司的应用审批规则处理。
 
-**必须保留 EXE 同级的 `_internal` 文件夹，不能单独拷贝 EXE。** 选择可写目录解压；不要直接在压缩包内运行。移动或更新程序前先关闭应用，使 Codex 连接恢复。
+**必须保留 EXE 同级的 `_internal` 文件夹，不能单独拷贝 EXE。** 选择可写目录解压；不要直接在压缩包内运行。
+
+## 它是做什么的
+
+它在本机启动一个 OpenAI 兼容的本地 HTTP 服务（默认 `http://127.0.0.1:8318`）。把 Agent（WorkBuddy、opencode、zcode、Codex 等任何支持 OpenAI 兼容 `base_url` 的工具）的 `base_url` 指向这个本地地址后，匹配规则的模型请求中的图片会先在本机 OCR 成文字，再把文字交给上游大模型。它**不修改任何 Agent 的配置文件**；关闭应用即停止代理，不影响 Agent 原有配置。
 
 ## 第一次使用
 
-1. 启动你自己的 OpenAI-compatible 上游服务，确认它可以正常访问。本工具不包含上游服务。
-2. 打开 `OCRProxyDesktop.exe` → **连接设置**，检查 Codex 配置路径、provider 名称、上游地址。OCR 端口默认 `8318`。请按实际 provider 调整；不会自动创建或切换 provider。
-3. **模型规则**每行填一条，例如 `GC-*`、`glm-*`、`deepseek-*`。支持 `*`（任意字符）和 `?`（单个字符），忽略大小写。输入模型名称可预览是否匹配。保存设置。
-4. 在**自动诊断**点击“运行自动诊断”。检查 Codex 配置、本地端口、上游接口与实际 OCR 数字图片识别。上游返回 401/403 表示 HTTP 服务已响应但需要鉴权，诊断不会读取密钥。
-5. 点击**启用 OCR 代理**，再重开 Codex 聊天；若客户端仍使用旧地址，请重启 Codex。代理运行期间请保持此应用打开。
-6. 关闭代理或正常退出应用，会恢复所选 provider 原来的 `base_url`。关闭后也应重开聊天或重启 Codex，使连接变更生效。
+1. 确认上游服务可用。默认上游是 `https://gateway.onewo.com/v1`，可在 **连接设置** 中修改。
+2. 打开 `OCRProxyDesktop.exe`，在 **连接设置** 检查上游地址与本地 OCR 端口（默认 `8318`）。
+3. **模型规则** 每行填一条，例如 `GC-*`、`glm-*`、`deepseek-*`。支持 `*`（任意字符）和 `?`（单个字符），忽略大小写。输入模型名称可预览是否匹配。保存设置。
+4. 点击 **启用 OCR 代理**，然后把 Agent 的 OpenAI 兼容 `base_url` 指向 `http://127.0.0.1:8318`（端口以界面显示为准），重开 Agent 会话。
+5. 在 **自动诊断** 点击“运行自动诊断”，检查设置、本地端口、上游 HTTP 与本地 OCR 实际识别。上游返回 401/403 表示 HTTP 服务已响应但需要鉴权，诊断不会读取密钥。
+6. 代理运行期间请保持本应用打开；关闭代理或退出应用即停止中转。
 
-如果原 WorkBuddy OCR 代理仍在占用 8318，本应用会提示冲突，不会终止旧进程。请先通过原工具停止，或更换本应用端口。更换端口前请确保旧工具没有尚待恢复的连接。
+## 各 Agent 怎么接
+
+应用不改任何 Agent 配置，只需把 Agent 的 OpenAI 兼容 `base_url` 指向本地地址：
+
+- WorkBuddy / opencode / zcode / Codex 等：在各自配置里把 OpenAI 兼容接口地址设为 `http://127.0.0.1:8318`（或界面显示的本地地址）。
+- 使用完成后，把地址改回原上游即可；本应用不会自动修改或恢复这些配置。
 
 ## 模型规则的含义
 
 ```text
-Codex → 本地 OCR 代理（127.0.0.1:8318）→ 你的上游服务 → 模型
-                   ├─ 匹配规则：图片 → 本机 OCR → 文本
-                   └─ 未匹配：原始请求和图片直接转发至上游
+Agent → 本地 OCR 代理（127.0.0.1:8318）→ 上游服务（默认 gateway.onewo.com/v1）→ 模型
+                  ├─ 匹配规则：图片 → 本机 OCR → 文本
+                  └─ 未匹配：原始请求和图片直接转发至上游
 ```
 
-Codex 的连接地址按 provider 配置，因此启用后此 provider 的所有请求经过本地中转。模型列表控制**哪些模型的图片会转成文字**。如果需要模型使用不同上游服务，应在上游服务中配置路由。
-
-这是 OCR API 中转工具，不是系统 HTTP / SOCKS 网络代理，不会更改系统网络代理设置。它不让上游自动具备图片理解能力：OCR 能读取截图文字、文档、报错；图表关系、颜色和画面细节应交给支持视觉的模型。
+模型列表控制**哪些模型的图片会转成文字**。这是 OCR API 中转工具，不是系统 HTTP / SOCKS 网络代理，不会更改系统网络代理设置。它不让上游自动具备图片理解能力：OCR 能读取截图文字、文档、报错；图表关系、颜色和画面细节应交给支持视觉的模型。
 
 支持 OpenAI Responses API 的 `input_image` 和 Chat Completions 的 `image_url`；支持流式 SSE。图片优先使用 `data:image/...;base64,...`。文件 ID 不支持。远程图片 URL 默认不下载，遇到会明确报错；如有需要，在连接设置中启用后由本机下载识别。此请求不会携带上游 API 鉴权信息。
 
-## 配置、恢复与数据
+## 配置与数据
 
 - 便携设置与滚动日志：EXE 同级 `data/`，首次运行自动创建；OCR 缓存只在内存，不保存图片和识别内容。
-- `data/settings.json`：上游地址、端口、模型规则、Codex 路径和 provider。
-- `data/routing.json`：代理启用期间的原连接地址与恢复记录；不复制完整 Codex 配置，不读取 API 密钥。
-- 只替换选中 provider 的单行 `base_url`，保留其他配置、注释和换行。原地址只有在未被其他程序更改时才恢复。若被外部更改，应用会保留该配置、提示检查，并继续提供已启动的代理服务。
-- 原工具已经将 Codex 指向相同 OCR 端口但没有恢复记录时，恢复目标按当前设置的上游地址加 `/v1` 推导。请先确认上游设置正确。
-- 异常退出、系统关机或强行结束进程可能来不及恢复。重新打开**原便携文件夹**，点击“恢复 Codex 直连”。找不到原目录时，可手动把对应 provider 的 `base_url` 恢复为原上游地址。
+- `data/settings.json`：上游地址、本地端口、模型规则与远程图片开关。
 - 修改上游、端口或模型规则前先关闭代理，再保存、重新启用。应用不自动启动代理，不驻留托盘，不安装系统服务。
 
 ## 自动诊断能证明什么
 
-诊断会检查设置格式、当前 provider 和连接地址、便携目录写入、本地服务状态与端口冲突、上游 `/v1/models` 的 HTTP 响应、内置 OCR 模型的实际数字识别，以及未恢复的连接记录。可导出脱敏文本报告。
+诊断会检查设置格式、便携目录写入、本地服务状态与端口冲突、上游 `/v1/models` 的 HTTP 响应、内置 OCR 模型的实际数字识别。可导出脱敏文本报告。
 
-诊断不调用付费大模型，不读取 API 密钥。HTTP 可达与 OCR 通过不能证明上游账号鉴权、某模型权限、真实 Codex 会话已成功。真实业务请求仍由客户端提供的认证头转发至上游。
+诊断不调用付费大模型，不读取 API 密钥。HTTP 可达与 OCR 通过不能证明上游账号鉴权、某模型权限、真实会话已成功。真实业务请求仍由客户端提供的认证头转发至上游。
 
 ## 开发与验证
 
-源码在交付项目的 `src/`。基于原 WorkBuddy 工具的双 API OCR 中转方案，桌面版重写了服务生命周期、连接恢复、错误处理和流式转发，未修改原目录。
-
-构建环境：Python 3.13 x64；依赖版本见 `requirements-runtime.txt` 和 `requirements-build.txt`。将依赖装入开发虚拟环境后运行 `build.ps1 -Python <python.exe>`。本次构建把额外桌面打包依赖放在项目 `vendor/`，未安装为系统桌面应用。
-
-也可以由 GitHub Actions 自动打包：推送 `v*` 形式的 Git tag 后，`.github/workflows/windows-release.yml` 会生成 Windows x64 便携版 ZIP、SHA256 校验文件，并自动创建 GitHub Release。手动执行该 workflow 时，只会产出构建产物，不会发布 Release。
+源码在 `src/`。构建环境：Python 3.13 x64；依赖版本见 `requirements-runtime.txt` 和 `requirements-build.txt`。将依赖装入开发虚拟环境后运行 `build.ps1 -Python <python.exe>`。
 
 可使用 EXE 内置的隔离自检：
 
 ```powershell
-# 写报告到指定的可写路径；只使用临时测试配置与本地模拟上游，不改真实 Codex。
-Start-Process -FilePath .\OCRProxyDesktop.exe -ArgumentList '--verify-bundle', 'D:\Temp\ocr-check.json' -Wait
+# 写报告到指定的可写路径；只使用临时测试配置与本地模拟上游，不改真实 Agent 配置。
+& .\OCRProxyDesktop.exe --verify-bundle 'D:\Temp\ocr-check.json'
 ```
 
 如输出路径含空格，请按 PowerShell 参数规则给路径加引号。源码与 EXE 的测试报告放在交付项目的 `verification-*.json`。依赖许可见 `licenses/` 与 `THIRD_PARTY_NOTICES.md`。

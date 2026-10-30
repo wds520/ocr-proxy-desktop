@@ -35,7 +35,7 @@ if python_license.exists():
 release = root / "release"
 release.mkdir(exist_ok=True)
 archive = release / "OCRProxyDesktop-1.0.0-win-x64-portable.zip"
-with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
     for file in sorted(bundle.rglob("*")):
         if file.is_file() and "data" not in file.relative_to(bundle).parts:
             z.write(file, file.relative_to(bundle.parent))

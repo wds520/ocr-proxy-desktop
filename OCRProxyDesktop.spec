@@ -30,7 +30,7 @@ a = Analysis(
 # the build host's PATH contains ICU 78 with suffixed exports; bundling it
 # causes QtCore to fail before the UI opens. Use the Windows system ICU.
 a.binaries = [entry for entry in a.binaries
-              if Path(entry[0]).name.lower() not in {'icuuc.dll', 'icudt78.dll'}]
+              if Path(entry[0]).name.lower() not in {'icuuc.dll', 'icudt78.dll', 'opengl32sw.dll', 'opencv_videoio_ffmpeg500_64.dll'}]
 pyz = PYZ(a.pure)
 
 exe = EXE(

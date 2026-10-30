@@ -1,4 +1,4 @@
-"""Drive real Qt buttons against an isolated Codex file and mock upstream."""
+"""Drive real Qt buttons against a mock upstream."""
 import json
 import socket
 import tempfile
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtTest import QTest
 
 from app import Window, STYLE
-from core import Settings, Store, atomic_write, read_provider
+from core import Settings, Store
 
 root = Path(__file__).resolve().parents[1]
 app = QApplication([])
@@ -49,11 +49,8 @@ with tempfile.TemporaryDirectory(prefix="ocr-qt-check-") as temp:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    config = directory / "config.toml"
-    base = f"http://127.0.0.1:{upstream.server_port}/v1"
-    atomic_write(config, f'model_provider = "cpa-gui"\n[model_providers.cpa-gui]\nbase_url = "{base}"\n')
     store = Store(directory / "data")
-    settings = Settings(upstream=f"http://127.0.0.1:{upstream.server_port}", listen_port=port, codex_config=str(config))
+    settings = Settings(upstream=f"http://127.0.0.1:{upstream.server_port}/v1", listen_port=port)
     store.save(settings)
     window = Window(store)
     window.show()
@@ -65,9 +62,8 @@ with tempfile.TemporaryDirectory(prefix="ocr-qt-check-") as temp:
     window.toggle.click()
     wait_for(lambda: not window.thread.isRunning())
     assert window.server.running
-    assert read_provider(config, settings.provider)[1] == settings.proxy_base
     assert not window.models.isEnabled()
-    checks.append("Enable button switches fixture provider and locks editable settings")
+    checks.append("Enable button starts proxy and locks editable settings")
     window.diagnose()
     wait_for(lambda: not window.thread.isRunning(), 60)
     assert "[失败]" not in window.report
@@ -79,18 +75,17 @@ with tempfile.TemporaryDirectory(prefix="ocr-qt-check-") as temp:
     window.toggle.click()
     wait_for(lambda: not window.thread.isRunning())
     assert window.server is None
-    assert read_provider(config, settings.provider)[1] == base
     assert window.models.isEnabled()
-    checks.append("Disable button restores fixture provider and unlocks settings")
+    checks.append("Disable button stops proxy and unlocks settings")
 
     window.toggle.click()
     wait_for(lambda: not window.thread.isRunning())
+    assert window.server.running
     window.close()
     wait_for(lambda: not window.isVisible())
-    assert read_provider(config, settings.provider)[1] == base
-    assert not store.journal_path.exists()
-    checks.append("Window close restores provider before process exit")
+    assert window.server is None
+    checks.append("Window close stops proxy before process exit")
     upstream.shutdown()
     upstream.server_close()
-(root / "verification-ui.json").write_text(json.dumps({"passed": True, "checks": checks, "scope": "Qt buttons, fixture config and mock upstream only"}, ensure_ascii=False, indent=2), encoding="utf-8")
+(root / "verification-ui.json").write_text(json.dumps({"passed": True, "checks": checks, "scope": "Qt buttons and mock upstream only"}, ensure_ascii=False, indent=2), encoding="utf-8")
 print("PASS: Qt button, diagnostic and close lifecycle checks")

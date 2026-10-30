@@ -3,12 +3,12 @@ from __future__ import annotations
 import platform
 import socket
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
-from core import Settings, Store, VERSION, active_provider, read_provider
+from core import Settings, Store, VERSION
+from engine import upstream_url
 
 
 def safe_url(value: str) -> str:
@@ -38,21 +38,6 @@ def run_diagnostics(settings: Settings, store: Store, ocr, owned_running: bool, 
         return "\n".join(lines)
 
     try:
-        _, base = read_provider(Path(settings.codex_config), settings.provider)
-        active = active_provider(Path(settings.codex_config))
-        if active != settings.provider:
-            add("注意", "Codex provider", "所选 provider 与 Codex 当前 provider 不同，请在连接设置中调整。")
-        else:
-            add("通过", "Codex provider", f"当前使用 {settings.provider}。")
-        add("通过" if base in (settings.direct_base, settings.proxy_base) else "注意", "Codex 连接地址", safe_url(base))
-        if base == settings.proxy_base and not owned_running:
-            add("注意", "连接恢复", "Codex 指向 OCR 端口，但本应用未启用。可启用本应用，或点击“恢复 Codex 直连”。")
-    except FileNotFoundError:
-        add("失败", "Codex 配置", "找不到配置文件，请在连接设置中选择 config.toml。")
-    except Exception:
-        add("失败", "Codex 配置", "无法读取 TOML 或找不到所选 provider 的 base_url。")
-
-    try:
         probe = store.directory / ".write-probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
@@ -79,7 +64,7 @@ def run_diagnostics(settings: Settings, store: Store, ocr, owned_running: bool, 
 
     try:
         with httpx.Client(trust_env=False, timeout=4, follow_redirects=False) as client:
-            response = client.get(settings.upstream.rstrip("/") + "/v1/models")
+            response = client.get(upstream_url(settings.upstream, "v1/models"))
         if response.status_code in (401, 403):
             add("注意", "上游连通性", f"服务已响应 HTTP {response.status_code}，需要客户端鉴权；本诊断不会读取或发送密钥。")
         elif response.status_code == 200:
@@ -87,19 +72,13 @@ def run_diagnostics(settings: Settings, store: Store, ocr, owned_running: bool, 
         else:
             add("注意", "上游模型接口", f"服务已响应 HTTP {response.status_code}，请检查上游服务地址或状态。")
     except Exception:
-        add("失败", "上游连通性", "上游无法连接或超时，请先启动 EasyCLIProxyAPI，并检查地址与端口。")
+        add("失败", "上游连通性", "上游无法连接或超时，请检查上游地址、网络与端口。")
 
     try:
         add("通过", "本地 OCR 实际识别", ocr.selftest())
     except Exception:
         add("失败", "本地 OCR 实际识别", "模型或运行库无法识别测试图片，请重新完整解压便携包，检查 _internal 文件夹。")
 
-    if store.journal_path.exists():
-        try:
-            journal = store.journal()
-            add("注意" if not owned_running else "通过", "连接恢复记录", "存在可恢复的原连接记录。" if journal else "无待恢复记录。")
-        except Exception:
-            add("失败", "连接恢复记录", "恢复记录损坏，请检查 data/routing.json。")
     lines += ["", "诊断未调用付费大模型接口，未读取 API 密钥。",
               "上游 HTTP 可达和本地 OCR 通过，不代表账号鉴权、模型权限或真实会话已经验证。"]
     return "\n".join(lines)

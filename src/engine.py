@@ -12,6 +12,7 @@ import re
 import socket
 import threading
 import time
+from urllib.parse import urlsplit
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,21 @@ from core import Settings, VERSION
 log = logging.getLogger("ocr_proxy")
 MAX_BODY = 64 * 1024 * 1024
 MAX_IMAGE = 20 * 1024 * 1024
+
+def upstream_url(upstream: str, path: str) -> str:
+    """Join a forwarded request path onto the upstream base, keeping /v1 exactly once."""
+    base = upstream.rstrip("/")
+    prefix = urlsplit(base).path.rstrip("/")
+    rel = path.lstrip("/")
+    if prefix:
+        lead = prefix.lstrip("/")
+        if rel == lead:
+            rel = ""
+        elif rel.startswith(lead + "/"):
+            rel = rel[len(lead) + 1:]
+    return base + ("/" + rel if rel else "")
+
+
 HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding", "expect", "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization"}
 
 
@@ -166,15 +182,14 @@ def make_app(settings: Settings, ocr: OCR) -> FastAPI:
                     # The new body is uncompressed even if the original had an encoding.
                     headers.pop("content-encoding", None)
                     log.info("OCR processed images=%d cache_hits=%d characters=%d", stats["images"], stats["cached"], stats["chars"])
-        # Absolute construction avoids httpx base_url accidentally dropping/duplicating /v1.
-        url = settings.upstream.rstrip("/") + "/" + path
+        url = upstream_url(settings.upstream, path)
         if request.url.query:
             url += "?" + request.url.query
         try:
             upstream = await client.send(client.build_request(request.method, url, headers=headers, content=body), stream=True)
         except httpx.HTTPError:
             log.warning("Upstream unavailable (credentials and request body omitted)")
-            return JSONResponse({"error": {"message": "无法连接上游服务，请启动 EasyCLIProxyAPI 并运行自动诊断。", "type": "upstream_unavailable"}}, status_code=502)
+            return JSONResponse({"error": {"message": "无法连接上游服务，请检查上游地址与网络后重试。", "type": "upstream_unavailable"}}, status_code=502)
         excluded = HOP | {v.strip().lower() for v in upstream.headers.get("connection", "").split(",")}
         response = StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
                                      background=BackgroundTask(upstream.aclose))

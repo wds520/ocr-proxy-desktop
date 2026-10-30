@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QLabel, QPushButton, QTabWidget, QFormLayout, QLineEdit, QSpinBox, QPlainTextEdit,
     QCheckBox, QFileDialog, QMessageBox, QFrame)
 
-from core import Settings, Store, Routing, VERSION, application_dir, active_provider, read_provider
+from core import Settings, Store, VERSION
 from diagnostics import run_diagnostics, safe_url
 from engine import OCR, ProxyServer, model_matches
 
@@ -31,7 +31,6 @@ class Worker(QObject):
         try:
             self.finished.emit(self.fn(self.progress.emit))
         except (ValueError, OSError) as exc:
-            # All ValueErrors are our own operational messages, never upstream bodies.
             self.failed.emit(str(exc) if isinstance(exc, ValueError) else "文件无法读写，请检查目录权限或配置文件是否被占用。")
         except Exception:
             logging.getLogger("ocr_proxy").error("Operation failed (private exception details omitted)")
@@ -43,7 +42,6 @@ class Window(QMainWindow):
         super().__init__()
         self.store = store
         self.settings = store.load()
-        self.routing = Routing(store)
         self.ocr = OCR()
         self.server = None
         self.thread = None
@@ -87,17 +85,11 @@ class Window(QMainWindow):
         status_row.addStretch()
         self.toggle = self.button("启用 OCR 代理", self.toggle_proxy, "primary")
         status_row.addWidget(self.toggle)
-        self.restore_button = self.button("恢复 Codex 直连", self.restore)
-        status_row.addWidget(self.restore_button)
         card_layout.addLayout(status_row)
         self.address = QLabel()
         self.address.setObjectName("muted")
         self.address.setTextInteractionFlags(Qt.TextSelectableByMouse)
         card_layout.addWidget(self.address)
-        self.current = QLabel()
-        self.current.setObjectName("muted")
-        self.current.setWordWrap(True)
-        card_layout.addWidget(self.current)
         layout.addWidget(card)
 
         self.tabs = QTabWidget()
@@ -118,7 +110,6 @@ class Window(QMainWindow):
         self.model_test.setPlaceholderText("输入模型名称，预览是否匹配，例如 GC-glm-5.3")
         self.match_label = QLabel("等待输入")
         self.model_test.textChanged.connect(self.preview_model)
-        self.models.textChanged.connect(self.preview_model)
         test_row.addWidget(self.model_test, 1)
         test_row.addWidget(self.match_label)
         models_layout.addLayout(test_row)
@@ -140,22 +131,31 @@ class Window(QMainWindow):
         self.port = QSpinBox()
         self.port.setRange(1024, 65535)
         self.port.setValue(self.settings.listen_port)
-        self.provider = QLineEdit(self.settings.provider)
-        self.config = QLineEdit(self.settings.codex_config)
-        path_row = QHBoxLayout()
-        path_row.addWidget(self.config, 1)
-        path_row.addWidget(self.button("选择文件", self.browse))
         self.remote = QCheckBox("允许下载请求中的远程图片 URL 后识别")
         self.remote.setChecked(self.settings.fetch_remote_images)
         form.addRow("上游服务根地址", self.upstream)
         form.addRow("本地 OCR 端口", self.port)
-        form.addRow("Codex provider", self.provider)
-        form.addRow("Codex 配置文件", path_row)
+        agent_row = QWidget()
+        agent_layout = QHBoxLayout(agent_row)
+        agent_layout.setContentsMargins(0, 0, 0, 0)
+        agent_layout.setSpacing(8)
+        self.agent_url = QLabel(f"http://127.0.0.1:{self.port.value()}")
+        self.agent_url.setObjectName("agentUrl")
+        self.agent_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.copy_url = QPushButton("⧉")
+        self.copy_url.setObjectName("copy")
+        self.copy_url.setCursor(Qt.PointingHandCursor)
+        self.copy_url.setToolTip("复制 Agent 要配置的本地地址")
+        self.copy_url.clicked.connect(self.copy_agent_url)
+        agent_layout.addWidget(self.agent_url, 1)
+        agent_layout.addWidget(self.copy_url)
+        form.addRow("Agent base_url", agent_row)
+        self.port.valueChanged.connect(self.update_agent_url)
         form.addRow("远程图片", self.remote)
         con_layout.addLayout(form)
-        note = QLabel("默认连接 EasyCLIProxyAPI（8317）。这里只配置 OCR 中转，不是系统 HTTP / SOCKS 代理。\n"
-                      "启用时只修改所选 provider 的 base_url；关闭与正常退出会恢复原地址。\n"
-                      "应用退出后不在后台驻留。启用/关闭后，请重开 Codex 聊天；必要时重启 Codex。")
+        note = QLabel("把 Agent 的 OpenAI 兼容 base_url 指向上方状态卡片中的本地地址，图片即可经本机 OCR 后交给模型。\n"
+                      "这里只配置 OCR 中转，不是系统 HTTP / SOCKS 代理；本应用不会修改任何 Agent 的配置。\n"
+                      "代理运行期间请保持本应用打开。启用/关闭后，请重开 Agent 会话或重启 Agent。")
         note.setWordWrap(True)
         note.setObjectName("muted")
         con_layout.addWidget(note)
@@ -202,7 +202,7 @@ class Window(QMainWindow):
     def collect(self):
         settings = Settings(upstream=self.upstream.text().strip().rstrip("/"), listen_port=self.port.value(),
             models=[line.strip() for line in self.models.toPlainText().splitlines() if line.strip()],
-            fetch_remote_images=self.remote.isChecked(), codex_config=self.config.text().strip(), provider=self.provider.text().strip())
+            fetch_remote_images=self.remote.isChecked())
         settings.validate()
         return settings
 
@@ -210,6 +210,13 @@ class Window(QMainWindow):
         name = self.model_test.text().strip()
         rules = [p.strip() for p in self.models.toPlainText().splitlines() if p.strip()]
         self.match_label.setText("匹配：图片 → 文字" if name and model_matches(name, rules) else ("保留原始图片" if name else "等待输入"))
+
+    def update_agent_url(self, *_):
+        self.agent_url.setText(f"http://127.0.0.1:{self.port.value()}")
+
+    def copy_agent_url(self):
+        QApplication.clipboard().setText(self.agent_url.text())
+        self.message.setText("已复制 Agent base_url，请粘贴到 Agent 配置中。")
 
     def busy(self, value):
         for button in self.actions:
@@ -258,7 +265,7 @@ class Window(QMainWindow):
 
     def toggle_proxy(self):
         if self.server and self.server.running:
-            self.restore()
+            self.stop_proxy()
             return
         try:
             settings = self.collect()
@@ -267,41 +274,30 @@ class Window(QMainWindow):
             self.error(str(exc) if isinstance(exc, ValueError) else "无法保存设置。")
             return
         self.settings = settings
-        self.message.setText("正在启动服务并切换 Codex 连接…")
+        self.message.setText("正在启动本地 OCR 代理…")
 
         def start(_):
             server = ProxyServer(settings, self.ocr)
             server.start()
-            try:
-                self.routing.enable(settings)
-            except Exception:
-                server.stop()
-                raise
             return server
 
         def started(server):
             self.server = server
-            self.message.setText("代理已启用。重开 Codex 聊天；若仍使用旧地址，请重启 Codex。")
+            self.message.setText("代理已启用。请把 Agent 的 base_url 指向本地地址，并重开会话。")
 
         self.job(start, started)
 
-    def restore(self):
-        try:
-            settings = self.settings if self.server or self.store.journal_path.exists() else self.collect()
-        except ValueError as exc:
-            self.error(str(exc))
-            return
-        self.message.setText("正在恢复 Codex 连接并结束代理请求…")
+    def stop_proxy(self):
+        self.message.setText("正在结束代理请求…")
 
         def stop(_):
-            message = self.routing.restore(settings)
             if self.server:
                 self.server.stop()
-            return message
+            return "代理已关闭。"
 
         def stopped(message):
             self.server = None
-            self.message.setText(message + " 重开 Codex 聊天后生效。")
+            self.message.setText(message + " 重开 Agent 会话后生效。")
             if self.closing:
                 self.allow_close = True
 
@@ -317,13 +313,23 @@ class Window(QMainWindow):
         self.output.clear()
         self.message.setText("诊断进行中，首次加载 OCR 模型可能需要数秒…")
         running = bool(self.server and self.server.running)
-
-        def done(report):
+        self.busy(True)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            def emit(line):
+                self.output.appendPlainText(line)
+                QApplication.processEvents()
+            report = run_diagnostics(settings, self.store, self.ocr, running, emit)
             self.report = report
             self.output.setPlainText(report)
             self.message.setText("诊断完成。请查看“失败”和“注意”项目。")
-
-        self.job(lambda emit: run_diagnostics(settings, self.store, self.ocr, running, emit), done)
+        except Exception:
+            logging.getLogger("ocr_proxy").error("Diagnostics failed (private exception details omitted)")
+            self.error("诊断未完成，请重试或检查完整解压情况。")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.busy(False)
+            self.refresh()
 
     def export(self):
         if not self.report:
@@ -337,11 +343,6 @@ class Window(QMainWindow):
             except OSError:
                 self.error("报告导出失败，请选择可写目录。")
 
-    def browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择 Codex 配置", self.config.text(), "TOML (*.toml)")
-        if path:
-            self.config.setText(path)
-
     def open_data(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.directory)))
 
@@ -350,15 +351,27 @@ class Window(QMainWindow):
         self.status.setText("●  代理已启用" if running else "●  代理未启用")
         self.status.setStyleSheet("color: #07795c" if running else "color: #64748b")
         self.toggle.setText("关闭 OCR 代理" if running else "启用 OCR 代理")
-        self.address.setText(f"Codex  →  127.0.0.1:{self.settings.listen_port}  →  {safe_url(self.settings.upstream)}")
+        base = f"http://127.0.0.1:{self.settings.listen_port}"
+        self.address.setText(f"Agent base_url  →  {base}  →  {safe_url(self.settings.upstream)}")
+
+    def maybe_show_onboarding(self):
+        marker = self.store.directory / ".onboarded"
+        if marker.exists():
+            return
+        QMessageBox.information(
+            self,
+            "欢迎使用 OCR 代理助手",
+            "首次使用只需 4 步：\n\n"
+            "1. 连接设置：确认“上游服务根地址”（默认已填 gateway.onewo.com/v1）。\n"
+            "2. 模型规则：已预填 GC-*、glm-*、deepseek-*，按需修改后点“保存设置”。\n"
+            "3. 回到顶部点“启用 OCR 代理”，复制“Agent base_url”旁的 ⧉ 图标。\n"
+            "4. 把地址粘贴到你的 Agent（WorkBuddy / opencode / zcode 等）的\n"
+            "    OpenAI 兼容 base_url，然后重开 Agent 会话。\n\n"
+            "最后可在“自动诊断”页一键检查环境是否就绪。代理运行期间请保持本应用打开。")
         try:
-            _, base = read_provider(Path(self.settings.codex_config), self.settings.provider)
-            text = "Codex 当前连接：" + safe_url(base)
-            if base == self.settings.proxy_base and not running:
-                text += "  · 请启用代理，或恢复直连"
-            self.current.setText(text)
-        except Exception:
-            self.current.setText("Codex 配置尚未就绪，请检查连接设置或运行自动诊断。")
+            marker.write_text(VERSION, encoding="utf-8")
+        except OSError:
+            pass
 
     def closeEvent(self, event):
         if self.allow_close:
@@ -368,10 +381,10 @@ class Window(QMainWindow):
             self.message.setText("正在处理操作，请完成后再退出。")
             event.ignore()
             return
-        if self.server or self.store.journal_path.exists():
+        if self.server and self.server.running:
             event.ignore()
             self.closing = True
-            self.restore()
+            self.stop_proxy()
         else:
             event.accept()
 
@@ -396,13 +409,19 @@ QLineEdit, QSpinBox, QPlainTextEdit { background: #fcfdff; border: 1px solid #cc
 QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid #087e83; }
 QPlainTextEdit { font-family: 'Consolas', 'Microsoft YaHei UI'; font-size: 13px; }
 QCheckBox { spacing: 8px; }
+QLabel#agentUrl { font-family: 'Consolas', 'Microsoft YaHei UI'; color: #087e83; font-weight: 600; }
+QPushButton#copy { padding: 4px 8px; min-width: 32px; max-width: 32px; max-height: 30px; }
+QMessageBox { background: #f7fafd; }
+QMessageBox QLabel { color: #243449; font-size: 13px; }
+QMessageBox QPushButton { background: #087e83; color: white; border: none; border-radius: 6px; padding: 8px 18px; font-weight: 600; min-width: 88px; }
+QMessageBox QPushButton:hover { background: #066a70; }
 """
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path)
-    parser.add_argument("--smoke-test", type=Path, help="save UI screenshot and exit, never change Codex")
+    parser.add_argument("--smoke-test", type=Path, help="save UI screenshot and exit, never change agent config")
     parser.add_argument("--verify-bundle", type=Path, help="run isolated integration checks and write report")
     args = parser.parse_args()
     if args.verify_bundle:
@@ -435,6 +454,8 @@ def main():
             window.allow_close = True
             window.close()
         QTimer.singleShot(1200, capture)
+    else:
+        window.maybe_show_onboarding()
     result = app.exec()
     lock.unlock()
     return result
